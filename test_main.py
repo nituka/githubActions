@@ -1,5 +1,5 @@
 import unittest
-from main import add
+from main import add, sub
 
 
 class TestMain(unittest.TestCase):
@@ -8,6 +8,9 @@ class TestMain(unittest.TestCase):
         self.assertEqual(add(-1, 1), 0)
         self.assertEqual(add(0, 0), 0)
 
+    def test_sub(self):
+        self.assertEqual(sub(3, 3), 0)
+        self.assertEqual(sub(3, 2), 1)
 
 if __name__ == "__main__":
     unittest.main()
