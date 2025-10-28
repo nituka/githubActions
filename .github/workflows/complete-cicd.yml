@@ -35,7 +35,7 @@ jobs:
     
     - name: Build Docker image locally
       run: |
-        docker build -t python-k8s-app:latest .
+        docker build -t python-calculator:latest .
         echo "✅ Docker image built successfully"
         
     - name: Show local deployment info
@@ -43,7 +43,7 @@ jobs:
         echo "🚀 Image built locally for manual deployment"
         echo ""
         echo "To deploy to your local Kubernetes:"
-        echo "1. Build image locally: docker build -t python-k8s-app:latest ."
+        echo "1. Build image locally: docker build -t python-calculator:latest ."
         echo "2. Apply deployment: kubectl apply -f k8s/deployment.yaml"
         echo "3. Apply service: kubectl apply -f k8s/service.yaml"
         echo "4. Check status: kubectl get pods -l app=python-calculator"
