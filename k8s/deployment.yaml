@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
       - name: python-calculator
-        image: python-k8s-app:latest
-        imagePullPolicy: Never
+        image: ghcr.io/nituka/githubactions:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000
         env:
