@@ -1,14 +1,10 @@
-name: Complete CI/CD Pipeline (GHCR)
+name: Simple CI/CD Pipeline
 
 on:
   push:
     branches: [ main, test ]
   pull_request:
     branches: [ main ]
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
@@ -30,62 +26,25 @@ jobs:
       run: |
         python -m unittest discover .
 
-  build-and-push:
+  build:
     needs: test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      image: ${{ steps.image.outputs.image }}
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix=sha-
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-    
-    - name: Output image
-      id: image
-      run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test'
-    
-    steps:
-    - uses: actions/checkout@v4
-        
-    - name: Show deployment info
+    - name: Build Docker image locally
       run: |
-        echo "🚀 Ready to deploy:"
-        echo "Image: ${{ needs.build-and-push.outputs.image }}"
+        docker build -t python-k8s-app:latest .
+        echo "✅ Docker image built successfully"
+        
+    - name: Show local deployment info
+      run: |
+        echo "🚀 Image built locally for manual deployment"
         echo ""
-        echo "For local Kubernetes deployment, run:"
-        echo "docker pull ${{ needs.build-and-push.outputs.image }}"
-        echo "docker tag ${{ needs.build-and-push.outputs.image }} python-k8s-app:latest"
-        echo "kubectl set image deployment/python-calculator python-calculator=python-k8s-app:latest"
+        echo "To deploy to your local Kubernetes:"
+        echo "1. Build image locally: docker build -t python-k8s-app:latest ."
+        echo "2. Apply deployment: kubectl apply -f k8s/deployment.yaml"
+        echo "3. Apply service: kubectl apply -f k8s/service.yaml"
+        echo "4. Check status: kubectl get pods -l app=python-calculator"
+        echo "5. Test app: curl http://localhost:30080/health"
