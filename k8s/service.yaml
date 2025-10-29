@@ -5,7 +5,7 @@ metadata:
   labels:
     app: python-calculator
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app: python-calculator
   ports:

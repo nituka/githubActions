@@ -1,10 +1,14 @@
-name: Simple CI/CD Pipeline
+name: Complete CI/CD Pipeline with Kind
 
 on:
   push:
     branches: [ main, test ]
   pull_request:
     branches: [ main ]
+
+env:
+  IMAGE_NAME: python-calculator
+  CLUSTER_NAME: python-calculator
 
 jobs:
   test:
@@ -26,25 +30,102 @@ jobs:
       run: |
         python -m unittest discover .
 
-  build:
+  deploy:
     needs: test
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test'
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Build Docker image locally
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: ${{ env.IMAGE_NAME }}:latest
+        outputs: type=docker,dest=/tmp/image.tar
+    
+    - name: Setup Kind
+      uses: helm/kind-action@v1.8.0
+      with:
+        cluster_name: ${{ env.CLUSTER_NAME }}
+        config: kind-cluster-config.yaml
+        wait: 300s
+    
+    - name: Load Docker image into Kind
       run: |
-        docker build -t python-calculator:latest .
-        echo "✅ Docker image built successfully"
+        docker load --input /tmp/image.tar
+        kind load docker-image ${{ env.IMAGE_NAME }}:latest --name ${{ env.CLUSTER_NAME }}
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
         
-    - name: Show local deployment info
+        echo "Waiting for deployment to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/python-calculator
+        
+        echo "✅ Deployment complete!"
+        kubectl get pods -l app=python-calculator
+        kubectl get services
+    
+    - name: Test deployed application
       run: |
-        echo "🚀 Image built locally for manual deployment"
-        echo ""
-        echo "To deploy to your local Kubernetes:"
-        echo "1. Build image locally: docker build -t python-calculator:latest ."
-        echo "2. Apply deployment: kubectl apply -f k8s/deployment.yaml"
-        echo "3. Apply service: kubectl apply -f k8s/service.yaml"
-        echo "4. Check status: kubectl get pods -l app=python-calculator"
-        echo "5. Test app: curl http://localhost:30080/health"
+        echo "Testing API endpoints with port forwarding..."
+        
+        # Wait for service to be fully ready
+        sleep 30
+        
+        # Start port forwarding in background
+        kubectl port-forward service/python-calculator-service 8080:80 &
+        PORT_FORWARD_PID=$!
+        
+        # Wait for port forwarding to establish
+        sleep 10
+        
+         # Test health endpoint and verify response
+        echo "Testing health endpoint..."
+        HEALTH_RESPONSE=$(curl -f -s http://localhost:8080/health)
+        echo "Health response: $HEALTH_RESPONSE"
+        if [[ "$HEALTH_RESPONSE" != *"healthy"* ]]; then
+          echo "❌ Health check failed!"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Health endpoint verified"
+        
+        # Test add endpoint and verify calculation
+        echo "Testing add endpoint (5 + 3 = 8)..."
+        ADD_RESPONSE=$(curl -f -s http://localhost:8080/add/5/3)
+        echo "Add response: $ADD_RESPONSE"
+        if [[ "$ADD_RESPONSE" != *"8"* ]]; then
+          echo "❌ Add calculation failed! Expected 8 in response"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Add endpoint verified"
+        
+        # Test subtract endpoint and verify calculation
+        echo "Testing subtract endpoint (10 - 4 = 6)..."
+        SUB_RESPONSE=$(curl -f -s http://localhost:8080/sub/10/4)
+        echo "Sub response: $SUB_RESPONSE"
+        if [[ "$SUB_RESPONSE" != *"6"* ]]; then
+          echo "❌ Subtract calculation failed! Expected 6 in response"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Subtract endpoint verified"
+        
+        # Stop port forwarding
+        kill $PORT_FORWARD_PID
+
+        echo "✅ All API endpoints are verified!"
+      
+    - name: Show deployment summary
+      run: |
+        echo "✅ Deployment Summary:"
+        kubectl get all -l app=python-calculator
