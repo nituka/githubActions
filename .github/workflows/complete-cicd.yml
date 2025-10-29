@@ -1,4 +1,4 @@
-name: Complete CI/CD Pipeline (GHCR)
+name: Complete CI/CD Pipeline with Kind
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: python-calculator
+  CLUSTER_NAME: python-calculator
 
 jobs:
   test:
@@ -30,62 +30,102 @@ jobs:
       run: |
         python -m unittest discover .
 
-  build-and-push:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      image: ${{ steps.image.outputs.image }}
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix=sha-
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-    
-    - name: Output image
-      id: image
-      run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
   deploy:
-    needs: build-and-push
+    needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test'
     
     steps:
     - uses: actions/checkout@v4
-        
-    - name: Show deployment info
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: ${{ env.IMAGE_NAME }}:latest
+        outputs: type=docker,dest=/tmp/image.tar
+    
+    - name: Setup Kind
+      uses: helm/kind-action@v1.8.0
+      with:
+        cluster_name: ${{ env.CLUSTER_NAME }}
+        config: kind-cluster-config.yaml
+        wait: 300s
+    
+    - name: Load Docker image into Kind
       run: |
-        echo "🚀 Ready to deploy:"
-        echo "Image: ${{ needs.build-and-push.outputs.image }}"
-        echo ""
-        echo "For local Kubernetes deployment, run:"
-        echo "docker pull ${{ needs.build-and-push.outputs.image }}"
-        echo "docker tag ${{ needs.build-and-push.outputs.image }} python-k8s-app:latest"
-        echo "kubectl set image deployment/python-calculator python-calculator=python-k8s-app:latest"
+        docker load --input /tmp/image.tar
+        kind load docker-image ${{ env.IMAGE_NAME }}:latest --name ${{ env.CLUSTER_NAME }}
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+        
+        echo "Waiting for deployment to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/python-calculator
+        
+        echo "✅ Deployment complete!"
+        kubectl get pods -l app=python-calculator
+        kubectl get services
+    
+    - name: Test deployed application
+      run: |
+        echo "Testing API endpoints with port forwarding..."
+        
+        # Wait for service to be fully ready
+        sleep 30
+        
+        # Start port forwarding in background
+        kubectl port-forward service/python-calculator-service 8080:80 &
+        PORT_FORWARD_PID=$!
+        
+        # Wait for port forwarding to establish
+        sleep 10
+        
+         # Test health endpoint and verify response
+        echo "Testing health endpoint..."
+        HEALTH_RESPONSE=$(curl -f -s http://localhost:8080/health)
+        echo "Health response: $HEALTH_RESPONSE"
+        if [[ "$HEALTH_RESPONSE" != *"healthy"* ]]; then
+          echo "❌ Health check failed!"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Health endpoint verified"
+        
+        # Test add endpoint and verify calculation
+        echo "Testing add endpoint (5 + 3 = 8)..."
+        ADD_RESPONSE=$(curl -f -s http://localhost:8080/add/5/3)
+        echo "Add response: $ADD_RESPONSE"
+        if [[ "$ADD_RESPONSE" != *"8"* ]]; then
+          echo "❌ Add calculation failed! Expected 8 in response"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Add endpoint verified"
+        
+        # Test subtract endpoint and verify calculation
+        echo "Testing subtract endpoint (10 - 4 = 6)..."
+        SUB_RESPONSE=$(curl -f -s http://localhost:8080/sub/10/4)
+        echo "Sub response: $SUB_RESPONSE"
+        if [[ "$SUB_RESPONSE" != *"6"* ]]; then
+          echo "❌ Subtract calculation failed! Expected 6 in response"
+          kill $PORT_FORWARD_PID
+          exit 1
+        fi
+        echo "✅ Subtract endpoint verified"
+        
+        # Stop port forwarding
+        kill $PORT_FORWARD_PID
+
+        echo "✅ All API endpoints are verified!"
+      
+    - name: Show deployment summary
+      run: |
+        echo "✅ Deployment Summary:"
+        kubectl get all -l app=python-calculator
