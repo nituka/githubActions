@@ -1,0 +1,63 @@
+# Kubernetes Deployment Configuration for Python Calculator App
+# This file defines how the Flask calculator app should run in Kubernetes
+
+apiVersion: apps/v1              # Kubernetes API version for Deployment resources
+kind: Deployment                 # This creates a Deployment (manages multiple identical pods)
+
+metadata:
+  name: python-calculator        # Name of the deployment
+  labels:
+    app: python-calculator       # Labels help identify and group resources
+
+spec:
+  replicas: 2                    # Run 2 identical copies of the app for high availability
+  
+  # SELECTOR - tells the deployment which pods it should manage
+  selector:
+    matchLabels:
+      app: python-calculator     # Manage pods with this label
+  
+  # TEMPLATE - defines what each pod should look like
+  template:
+    metadata:
+      labels:
+        app: python-calculator   # Each pod gets this label (matches selector above)
+    
+    spec:
+      containers:
+      - name: python-calculator           # Container name within the pod
+        image: python-calculator:latest   # Docker image to use (CHANGE THIS to gcr.io/your-project/python-calculator:latest)
+        imagePullPolicy: Never            # CHANGE THIS to "Always" for GCR images
+        
+        # NETWORKING
+        ports:
+        - containerPort: 5000             # Port the Flask app listens on inside the container
+        
+        # ENVIRONMENT VARIABLES
+        env:
+        - name: PORT                      # Tell the Flask app which port to use
+          value: "5000"
+        
+        # HEALTH CHECKS
+        livenessProbe:                    # Kubernetes will restart the pod if this check fails
+          httpGet:
+            path: /health                 # Endpoint to check (your Flask app should have this)
+            port: 5000
+          initialDelaySeconds: 30         # Wait 30 seconds before first check
+          periodSeconds: 10               # Check every 10 seconds
+          
+        readinessProbe:                   # Kubernetes won't send traffic until this check passes
+          httpGet:
+            path: /health                 # Same endpoint as liveness probe
+            port: 5000
+          initialDelaySeconds: 5          # Wait 5 seconds before first check
+          periodSeconds: 5                # Check every 5 seconds
+        
+        # RESOURCE LIMITS
+        resources:
+          requests:                       # Minimum resources guaranteed to this container
+            memory: "64Mi"                # 64 megabytes of RAM
+            cpu: "100m"                   # 0.1 CPU cores (100 millicores)
+          limits:                         # Maximum resources this container can use
+            memory: "128Mi"               # 128 megabytes of RAM max
+            cpu: "200m"                   # 0.2 CPU cores max

@@ -48,12 +48,12 @@ jobs:
         push: false
         tags: ${{ env.IMAGE_NAME }}:latest
         outputs: type=docker,dest=/tmp/image.tar
-    
+        
     - name: Setup Kind
       uses: helm/kind-action@v1.8.0
       with:
         cluster_name: ${{ env.CLUSTER_NAME }}
-        config: kind-cluster-config.yaml
+        config: local-testing/kind-cluster.yaml
         wait: 300s
     
     - name: Load Docker image into Kind
@@ -63,8 +63,8 @@ jobs:
     
     - name: Deploy to Kubernetes
       run: |
-        kubectl apply -f k8s/deployment.yaml
-        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s-local/deployment.yaml
+        kubectl apply -f k8s-local/service.yaml
         
         echo "Waiting for deployment to be ready..."
         kubectl wait --for=condition=available --timeout=300s deployment/python-calculator
