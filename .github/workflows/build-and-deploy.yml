@@ -100,7 +100,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: nituka/ArgoCD_calculator  # Your ArgoCD config repo
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.CROSS_REPO_TOKEN }}
         path: argocd-config
     
     - name: Update Deployment Image
