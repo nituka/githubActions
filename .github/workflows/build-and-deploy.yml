@@ -1,0 +1,126 @@
+# Simple Calculator CI/CD with AWS ECR
+name: Test and Deploy Calculator
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ap-south-1  # AWS region for ECR
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}  # Your AWS account ID
+  IMAGE_NAME: python-calculator
+  REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+
+jobs:
+  # Step 1: Test Calculator Functions
+  test-calculator:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest requests
+        
+    - name: Run Unit Tests
+      run: |
+        python -m pytest test_main.py -v
+        
+    - name: Run Integration Tests (Local)
+      run: |
+        # Start the app in background
+        python app.py &
+        APP_PID=$!
+        
+        # Wait for app to start
+        sleep 5
+        
+        # Test endpoints
+        curl -f http://localhost:5000/health
+        curl -f http://localhost:5000/add/5/3 | grep "8"
+        curl -f http://localhost:5000/sub/10/4 | grep "6"
+        
+        # Kill the app
+        kill $APP_PID
+        
+        echo "✅ Calculator tests passed!"
+
+  # Step 2: Build and Push Image
+  build-and-push:
+    needs: test-calculator  # Only build if calculator tests pass
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.build.outputs.image-tag }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Build and Push Image to ECR
+      id: build
+      run: |
+        # Create unique tag with timestamp
+        IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v$(date +%Y%m%d-%H%M%S)"
+        LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        
+        # Build image
+        docker build -t $IMAGE_TAG -t $LATEST_TAG .
+        
+        # Push both tags
+        docker push $IMAGE_TAG
+        docker push $LATEST_TAG
+        
+        echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+        echo "🐳 Built and pushed to ECR: $IMAGE_TAG"
+
+  # Step 2: Update ArgoCD Config Repository
+  update-argocd-config:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout ArgoCD Config Repo
+      uses: actions/checkout@v4
+      with:
+        repository: nituka/ArgoCD_calculator  # Your ArgoCD config repo
+        token: ${{ secrets.GITHUB_TOKEN }}
+        path: argocd-config
+    
+    - name: Update Deployment Image
+      run: |
+        cd argocd-config
+        
+        # Update the image tag in deployment.yaml
+        sed -i "s|image: .*/python-calculator:.*|image: ${{ needs.build-and-push.outputs.image-tag }}|g" manifests/deployment.yaml
+        
+        echo "📝 Updated deployment.yaml with new image: ${{ needs.build-and-push.outputs.image-tag }}"
+    
+    - name: Commit and Push Changes
+      run: |
+        cd argocd-config
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        git add manifests/deployment.yaml
+        git commit -m "🚀 Update image to ${{ needs.build-and-push.outputs.image-tag }}"
+        git push
+        
+        echo "✅ ArgoCD config updated! ArgoCD will deploy automatically."
